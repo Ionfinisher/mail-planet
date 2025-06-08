@@ -5,14 +5,16 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 interface ApiIpLocation {
-  id: number;
-  latitude: number;
-  longitude: number;
-  rawData: {
-    FromName?: string;
-    From?: string;
-    Subject?: string;
-  };
+  ipAddress: string;
+  latitude: number | null;
+  longitude: number | null;
+  rawData:
+    | {
+        FromName?: string;
+        From?: string;
+        Subject?: string;
+      }
+    | any;
   country?: string | null;
   emailCount?: number;
   countryFlag?: string | null;
@@ -58,7 +60,7 @@ const Planet = () => {
       );
       return;
     }
-    setMapboxTokenError(null); // Clear any previous error
+    setMapboxTokenError(null);
 
     if (!mapRef.current) {
       mapboxgl.accessToken = mapboxAccessToken;
@@ -84,61 +86,126 @@ const Planet = () => {
       markersRef.current = [];
 
       if (fetchedIpLocations.length > 0) {
+        const locationsByCoord: Record<string, ApiIpLocation[]> = {};
         fetchedIpLocations.forEach((location) => {
           if (
-            typeof location.longitude !== "number" ||
-            typeof location.latitude !== "number"
+            typeof location.longitude === "number" &&
+            typeof location.latitude === "number"
           ) {
-            console.warn(
-              "Skipping location with invalid coordinates:",
-              location
-            );
-            return;
+            const key = `${location.latitude.toFixed(
+              5
+            )}_${location.longitude.toFixed(5)}`;
+            if (!locationsByCoord[key]) {
+              locationsByCoord[key] = [];
+            }
+            locationsByCoord[key].push(location);
           }
+        });
+
+        Object.values(locationsByCoord).forEach((group) => {
+          if (group.length === 0) return;
+
+          const representativeLocation = group[0];
+          const { longitude, latitude } = representativeLocation;
+
+          if (typeof longitude !== "number" || typeof latitude !== "number")
+            return;
 
           const el = document.createElement("div");
-
           el.className = "marker";
-          el.style.backgroundImage = `url(/email.svg)`;
-          el.style.width = `35px`;
-          el.style.height = `45px`;
-          el.style.backgroundSize = "100%";
+          el.style.width = `45px`;
+          el.style.height = `35px`;
+          el.style.backgroundSize = "contain";
           el.style.display = "block";
           el.style.border = "none";
-          el.style.borderRadius = "50%";
           el.style.cursor = "pointer";
           el.style.padding = "0";
+          el.style.backgroundRepeat = "no-repeat";
 
-          const fromName = location.rawData?.FromName || "Unknown Sender";
-          const fromEmail = location.rawData?.From || "N/A";
-          const subject = location.rawData?.Subject || "No Subject";
-          const country = location.country || "N/A";
-          const emailCount =
-            location.emailCount !== undefined ? location.emailCount : "N/A";
-          const countryFlag = location.countryFlag;
+          let popupContentHtml = "";
+          let markerIconUrl = "/email.png";
 
-          const popupContent = `
-            <div style="color: black; font-family: sans-serif; padding: 8px; font-size: 14px;">
-              <h3 style="margin: 0 0 8px 0; font-size: 1.1em;">Email Details</h3>
-              <p style="margin: 4px 0;"><strong>From:</strong> ${fromName} (${fromEmail})</p>
-              <p style="margin: 4px 0;"><strong>Subject:</strong> ${subject}</p>
-              <hr style="margin: 8px 0;">
-              <span style="margin: 4px 0; display: flex; gap: 5px;"><strong>Location:</strong><img src="${countryFlag}" alt="${country}_flag_image" width="30" height="10"> ${country}</span>
-              <p s></p>
-              <p style="margin: 4px 0;"><strong>Email Count:</strong> ${emailCount}</p>
-            </div>`;
+          if (group.length === 1) {
+            const location = group[0];
+            const fromName = location.rawData?.FromName || "Unknown Sender";
+            const fromEmail = location.rawData?.From || "N/A";
+            const subject = location.rawData?.Subject || "No Subject";
+            const country = location.country || "N/A";
+            const emailCount = location.emailCount ?? "N/A";
+            const countryFlag = location.countryFlag;
+
+            popupContentHtml = `
+              <div style="color: black; font-family: sans-serif; padding: 8px; font-size: 14px; max-height: 300px; overflow-y: auto;">
+                <h3 style="margin: 0 0 8px 0; font-size: 1.1em;">Email Details</h3>
+                <p style="margin: 4px 0;"><strong>From:</strong> ${fromName} (${fromEmail})</p>
+                <p style="margin: 4px 0;"><strong>Subject:</strong> ${subject}</p>
+                <hr style="margin: 8px 0;">
+                <span style="margin: 4px 0; display: flex; align-items: center; gap: 5px;"><strong>Location:</strong>${
+                  countryFlag
+                    ? `<img src="${countryFlag}" alt="${country}_flag_image" width="20" height="15" style="display: inline-block; vertical-align: middle;">`
+                    : ""
+                } ${country}</span>
+                <p style="margin: 4px 0;"><strong>Emails from this IP:</strong> ${emailCount}</p>
+              </div>`;
+          } else {
+            markerIconUrl = "/email-group.png";
+            const totalEmailsFromAllSourcesInGroup = group.reduce(
+              (sum, loc) => sum + (loc.emailCount || 0),
+              0
+            );
+            const country = representativeLocation.country || "N/A";
+            const countryFlag = representativeLocation.countryFlag;
+
+            let sourcesHtml =
+              '<ul style="list-style: none; padding-left: 0; margin-top: 5px;">';
+            group.forEach((loc, index) => {
+              const fromName = loc.rawData?.FromName || "Unknown Sender";
+              const fromEmail = loc.rawData?.From || "N/A";
+              const subject = loc.rawData?.Subject || "No Subject";
+              const individualIpEmailCount = loc.emailCount || 0;
+              sourcesHtml += `
+                <li style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee;">
+                  <p style="margin: 2px 0; font-size: 0.9em;"><strong>Src ${
+                    index + 1
+                  } From:</strong> ${fromName} (${fromEmail})</p>
+                  <p style="margin: 2px 0; font-size: 0.9em;"><strong>Subject:</strong> ${subject}</p>
+                  <p style="margin: 2px 0; font-size: 0.9em;"><strong>Emails from this IP:</strong> ${individualIpEmailCount}</p>
+                </li>`;
+            });
+            sourcesHtml += "</ul>";
+            if (group.length === 0)
+              sourcesHtml = "<p>No source details available.</p>";
+
+            popupContentHtml = `
+              <div style="color: black; font-family: sans-serif; padding: 8px; font-size: 14px; max-height: 300px; overflow-y: auto;">
+                <h3 style="margin: 0 0 8px 0; font-size: 1.1em;">Multiple Email Sources (${
+                  group.length
+                })</h3>
+                <p style="margin: 4px 0;"><strong>Total emails from these sources:</strong> ${totalEmailsFromAllSourcesInGroup}</p>
+                <span style="margin: 4px 0; display: flex; align-items: center; gap: 5px;"><strong>Location:</strong>${
+                  countryFlag
+                    ? `<img src="${countryFlag}" alt="${country}_flag_image" width="20" height="15" style="display: inline-block; vertical-align: middle;">`
+                    : ""
+                } ${country}</span>
+                <hr style="margin: 8px 0;">
+                <h4 style="margin: 10px 0 5px 0; font-size: 1em;">Individual Sources:</h4>
+                ${sourcesHtml}
+              </div>`;
+          }
+
+          el.style.backgroundImage = `url(${markerIconUrl})`;
           const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
-            popupContent
+            popupContentHtml
           );
 
           const newMarker = new mapboxgl.Marker(el)
-            .setLngLat([location.longitude, location.latitude])
+            .setLngLat([longitude, latitude])
             .setPopup(popup)
             .addTo(map);
           markersRef.current.push(newMarker);
         });
 
-        if (!initialFlyToDoneRef.current) {
+        if (!initialFlyToDoneRef.current && fetchedIpLocations.length > 0) {
           const lastLocation =
             fetchedIpLocations[fetchedIpLocations.length - 1];
           if (
